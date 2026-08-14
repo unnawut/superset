@@ -67,9 +67,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: pip install --quiet ruff
-      - name: Lint changed Python files
-        run: ruff check superset/ tests/unit_tests/ --output-format=github
+      - name: Lint only the files this PR touched
+        # Linting the whole tree fails on violations that predate the change,
+        # which is precisely the noise Superset's own workflows were removed to
+        # avoid. A remediation PR must be judged on what it changed.
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "${{ github.base_ref }}"
+          files=$(git diff --name-only --diff-filter=ACMR \
+            "origin/${{ github.base_ref }}"...HEAD -- '*.py' | tr '\n' ' ')
+          if [ -z "$files" ]; then
+            echo "No Python files changed."
+            exit 0
+          fi
+          echo "Linting: $files"
+          ruff check $files --output-format=github
