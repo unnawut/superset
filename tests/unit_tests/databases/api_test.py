@@ -347,8 +347,8 @@ def test_database_connection(
     }
 
 
-@pytest.mark.skip(reason="Works locally but fails on CI")
 def test_update_with_password_mask(
+    mocker: MockerFixture,
     app: Any,
     session: Session,
     client: Any,
@@ -361,6 +361,21 @@ def test_update_with_password_mask(
     from superset.models.core import Database
 
     DatabaseRestApi.datamodel._session = session
+
+    # updating a DB connection syncs its permissions, which requires a user in the
+    # session and a live connection
+    mocker.patch(
+        "superset.commands.database.update.get_username",
+        return_value="admin",
+    )
+    mocker.patch(
+        "superset.commands.database.sync_permissions.security_manager.get_user_by_username",
+        return_value=Mock(id=1),
+    )
+    mocker.patch(
+        "superset.commands.database.sync_permissions.ping",
+        return_value=True,
+    )
 
     # create table for databases
     Database.metadata.create_all(session.get_bind())  # pylint: disable=no-member
@@ -380,7 +395,7 @@ def test_update_with_password_mask(
     db.session.add(database)
     db.session.commit()
 
-    client.put(
+    response = client.put(
         "/api/v1/database/1",
         json={
             "encrypted_extra": json.dumps(
@@ -393,6 +408,8 @@ def test_update_with_password_mask(
             ),
         },
     )
+    assert response.status_code == 200
+
     database = db.session.query(Database).one()
     assert (
         database.encrypted_extra
