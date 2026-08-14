@@ -1023,6 +1023,17 @@ function DatasourceEditor({
     validate(onChangeInternal);
   }, [validate, onChangeInternal]);
 
+  // The effects below react to a single value change while calling callbacks
+  // whose identity changes on every datasource edit. Refs synced by an effect
+  // declared ahead of them expose the latest closure, so their dependency
+  // arrays stay complete without re-running on unrelated identity changes.
+  const validateAndChangeRef = useRef(validateAndChange);
+  const onChangeInternalRef = useRef(onChangeInternal);
+  useEffect(() => {
+    validateAndChangeRef.current = validateAndChange;
+    onChangeInternalRef.current = onChangeInternal;
+  }, [validateAndChange, onChangeInternal]);
+
   const onDatasourceChange = useCallback((newDatasource: DatasourceObject) => {
     setDatasource(newDatasource);
   }, []);
@@ -1046,9 +1057,8 @@ function DatasourceEditor({
       return;
     }
     if (isComponentMounted.current) {
-      validateAndChange();
+      validateAndChangeRef.current();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasource]);
 
   const onChangeEditMode = useCallback(() => {
@@ -1066,9 +1076,8 @@ function DatasourceEditor({
       return;
     }
     if (isComponentMounted.current) {
-      onChangeInternal();
+      onChangeInternalRef.current();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasourceType]);
 
   const handleFoldersChange = useCallback((newFolders: DatasourceFolder[]) => {
@@ -1105,9 +1114,8 @@ function DatasourceEditor({
       return;
     }
     if (isComponentMounted.current) {
-      validateAndChange();
+      validateAndChangeRef.current();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [databaseColumns, calculatedColumns]);
 
   const getSQLLabUrl = useCallback(() => {
@@ -1241,15 +1249,19 @@ function DatasourceEditor({
     }
   }, [datasource, addSuccessToast, addDangerToast, setColumns]);
 
+  const syncMetadataRef = useRef(syncMetadata);
+  useEffect(() => {
+    syncMetadataRef.current = syncMetadata;
+  }, [syncMetadata]);
+
   // After a physical table change, refresh columns from the new table, matching
   // the legacy class component's tableChangeAndSyncMetadata path. Declared after
   // the validation effect so validation runs first.
   useEffect(() => {
     if (isComponentMounted.current && pendingTableSync.current) {
       pendingTableSync.current = false;
-      syncMetadata();
+      syncMetadataRef.current();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasource]);
 
   const fetchUsageData = useCallback(
@@ -1447,8 +1459,7 @@ function DatasourceEditor({
         propsDatasource.columns.filter(col => !col.expression),
       );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [propsDatasource]);
+  }, [propsDatasource, calculatedColumns]);
 
   const renderSqlEditorOverlay = useCallback(
     () => (
