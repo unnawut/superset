@@ -22,6 +22,7 @@ from flask_appbuilder import expose
 from flask_appbuilder.security.decorators import has_access, has_access_api
 from flask_babel import gettext as __
 from sqlalchemy import and_
+from sqlalchemy.exc import SQLAlchemyError
 
 from superset import db
 from superset.models.sql_lab import Query, TableSchema, TabState
@@ -80,8 +81,13 @@ class TabStateView(BaseSupersetView):
             db.session.add(tab_state)
             db.session.commit()
             return json_success(json.dumps({"id": tab_state.id}))
-        except Exception as ex:  # pylint: disable=broad-except
+        except (KeyError, ValueError) as ex:
             db.session.rollback()
+            logger.warning("Invalid query editor payload: %s", ex)
+            return json_error_response(error_msg_from_exception(ex), 400)
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            logger.exception("Error creating tab state")
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -102,8 +108,9 @@ class TabStateView(BaseSupersetView):
             ).delete(synchronize_session=False)
             db.session.commit()
             return json_success(json.dumps("OK"))
-        except Exception as ex:  # pylint: disable=broad-except
+        except SQLAlchemyError as ex:
             db.session.rollback()
+            logger.exception("Error deleting tab state %s", tab_state_id)
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -139,8 +146,9 @@ class TabStateView(BaseSupersetView):
             )
             db.session.commit()
             return json_success(json.dumps(tab_state_id))
-        except Exception as ex:  # pylint: disable=broad-except
+        except SQLAlchemyError as ex:
             db.session.rollback()
+            logger.exception("Error activating tab state %s", tab_state_id)
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -157,8 +165,13 @@ class TabStateView(BaseSupersetView):
             db.session.query(TabState).filter_by(id=tab_state_id).update(fields)
             db.session.commit()
             return json_success(json.dumps(tab_state_id))
-        except Exception as ex:  # pylint: disable=broad-except
+        except ValueError as ex:
             db.session.rollback()
+            logger.warning("Invalid tab state payload: %s", ex)
+            return json_error_response(error_msg_from_exception(ex), 400)
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            logger.exception("Error updating tab state %s", tab_state_id)
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -177,8 +190,13 @@ class TabStateView(BaseSupersetView):
             )
             db.session.commit()
             return json_success(json.dumps(tab_state_id))
-        except Exception as ex:  # pylint: disable=broad-except
+        except (KeyError, ValueError) as ex:
             db.session.rollback()
+            logger.warning("Invalid query id payload: %s", ex)
+            return json_error_response(error_msg_from_exception(ex), 400)
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            logger.exception("Error migrating query to tab state %s", tab_state_id)
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -221,8 +239,11 @@ class TabStateView(BaseSupersetView):
             ).delete(synchronize_session=False)
             db.session.commit()
             return json_success(json.dumps("OK"))
-        except Exception as ex:  # pylint: disable=broad-except
+        except SQLAlchemyError as ex:
             db.session.rollback()
+            logger.exception(
+                "Error deleting query %s from tab state %s", client_id, tab_state_id
+            )
             return json_error_response(error_msg_from_exception(ex), 400)
 
 
@@ -258,8 +279,13 @@ class TableSchemaView(BaseSupersetView):
             db.session.add(table_schema)
             db.session.commit()
             return json_success(json.dumps({"id": table_schema.id}))
-        except Exception as ex:  # pylint: disable=broad-except
+        except (KeyError, ValueError) as ex:
             db.session.rollback()
+            logger.warning("Invalid table payload: %s", ex)
+            return json_error_response(error_msg_from_exception(ex), 400)
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            logger.exception("Error creating table schema")
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -281,8 +307,9 @@ class TableSchemaView(BaseSupersetView):
             )
             db.session.commit()
             return json_success(json.dumps("OK"))
-        except Exception as ex:  # pylint: disable=broad-except
+        except SQLAlchemyError as ex:
             db.session.rollback()
+            logger.exception("Error deleting table schema %s", table_schema_id)
             return json_error_response(error_msg_from_exception(ex), 400)
 
     @has_access_api
@@ -306,6 +333,11 @@ class TableSchemaView(BaseSupersetView):
             db.session.commit()
             response = json.dumps({"id": table_schema_id, "expanded": payload})
             return json_success(response)
-        except Exception as ex:  # pylint: disable=broad-except
+        except (KeyError, ValueError) as ex:
             db.session.rollback()
+            logger.warning("Invalid expanded payload: %s", ex)
+            return json_error_response(error_msg_from_exception(ex), 400)
+        except SQLAlchemyError as ex:
+            db.session.rollback()
+            logger.exception("Error updating table schema %s", table_schema_id)
             return json_error_response(error_msg_from_exception(ex), 400)
