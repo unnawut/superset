@@ -106,18 +106,74 @@ const TYPES: TypeConfig[] = [
   },
 ];
 
-async function openArchive(page: Page, typeLabel: string, name: string) {
+/** A page of archived rows: the selected type's own list endpoint. */
+const LIST_REQUEST = /\/api\/v1\/(chart|dashboard|dataset)\/\?q=/;
+
+/**
+ * Wait for the list to settle, i.e. for a fetched page of rows to be on screen.
+ *
+ * `archived-list-view` is the page container: it is visible as soon as the
+ * component mounts, which is before the first page of rows has been fetched and
+ * the table's filter state is wired up. Typing into the search box in that
+ * window can be swallowed, leaving the list unfiltered — so nothing may touch
+ * the filters until the table has settled into one of its two loaded states,
+ * rendered rows or the empty state.
+ */
+async function waitForListSettled(page: Page) {
+  const listView = page.getByTestId('archived-list-view');
+  await expect(listView).toBeVisible();
+  await expect(
+    listView
+      .locator('[data-test="table-row"], [data-test="empty-state"]')
+      .first(),
+  ).toBeVisible();
+}
+
+async function gotoArchive(page: Page) {
   await page.goto('archived/');
-  await expect(page.getByTestId('archived-list-view')).toBeVisible();
-  // Select the object type, then narrow to the unique name. The antd Select's
-  // value chip overlays the combobox input, so force the click to open it, then
-  // pick the option from the portal listbox.
+  await waitForListSettled(page);
+}
+
+/**
+ * Pick an object type. The body remounts per type and refetches, so wait for
+ * that request before checking the table: the outgoing type's rows are still
+ * rendered until the new page arrives and would otherwise satisfy the wait.
+ */
+async function selectArchiveType(page: Page, typeLabel: string) {
+  // The antd Select's value chip overlays the combobox input, so force the
+  // click to open it, then pick the option from the portal listbox.
   await page.getByRole('combobox', { name: 'Type' }).click({ force: true });
+  const listLoaded = page.waitForResponse(
+    response =>
+      LIST_REQUEST.test(response.url()) &&
+      response.request().method() === 'GET',
+  );
   await page.getByRole('option', { name: typeLabel, exact: true }).click();
+  await listLoaded;
+  await waitForListSettled(page);
+}
+
+/**
+ * Type a value into the Name search filter and submit it.
+ *
+ * The applied filter is mirrored into the `?filters=` URL param, so waiting for
+ * the value to appear there proves the submit reached the list's filter state
+ * instead of being dropped — without it, an unfiltered list is indistinguishable
+ * from a list whose filter matched everything.
+ */
+async function searchArchive(page: Page, value: string) {
   const search = page.getByPlaceholder(/type a value/i);
   await search.click();
-  await search.fill(name);
+  await search.fill(value);
   await search.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`filters=[^&]*${value}`));
+}
+
+/** Open the archive and narrow it to a single object by type and unique name. */
+async function openArchive(page: Page, typeLabel: string, name: string) {
+  await gotoArchive(page);
+  await selectArchiveType(page, typeLabel);
+  await searchArchive(page, name);
 }
 
 for (const cfg of TYPES) {
@@ -192,13 +248,8 @@ test('permanently deletes an archived item from the view', async ({ page }) => {
 test('shows an empty message and no rows when the search matches nothing', async ({
   page,
 }) => {
-  await page.goto('archived/');
-  await expect(page.getByTestId('archived-list-view')).toBeVisible();
-
-  const search = page.getByPlaceholder(/type a value/i);
-  await search.click();
-  await search.fill(`e2e_nonexistent_${Date.now()}`);
-  await search.press('Enter');
+  await gotoArchive(page);
+  await searchArchive(page, `e2e_nonexistent_${Date.now()}`);
 
   await expect(
     page.getByText('No results match your filter criteria'),
