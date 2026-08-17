@@ -106,14 +106,37 @@ const TYPES: TypeConfig[] = [
   },
 ];
 
+/**
+ * Wait for the list to have rendered its first page of results.
+ *
+ * `archived-list-view` is the container: it mounts before the first page has
+ * been fetched and the table's filter state is wired up, and driving the filter
+ * controls in that window can have the input swallowed, leaving the list
+ * unfiltered. The body settles into exactly one of two terminal states — rows
+ * (each carrying a Recover action) or the empty state — neither of which is
+ * rendered while the fetch is still in flight.
+ */
+async function waitForArchivedList(page: Page) {
+  const listView = page.getByTestId('archived-list-view');
+  await expect(listView).toBeVisible();
+  await expect(
+    listView
+      .getByTestId('archived-row-restore')
+      .first()
+      .or(listView.getByTestId('empty-state')),
+  ).toBeVisible();
+}
+
 async function openArchive(page: Page, typeLabel: string, name: string) {
   await page.goto('archived/');
-  await expect(page.getByTestId('archived-list-view')).toBeVisible();
+  await waitForArchivedList(page);
   // Select the object type, then narrow to the unique name. The antd Select's
   // value chip overlays the combobox input, so force the click to open it, then
   // pick the option from the portal listbox.
   await page.getByRole('combobox', { name: 'Type' }).click({ force: true });
   await page.getByRole('option', { name: typeLabel, exact: true }).click();
+  // The body remounts per type, so let that type's own first fetch settle too.
+  await waitForArchivedList(page);
   const search = page.getByPlaceholder(/type a value/i);
   await search.click();
   await search.fill(name);
@@ -193,7 +216,7 @@ test('shows an empty message and no rows when the search matches nothing', async
   page,
 }) => {
   await page.goto('archived/');
-  await expect(page.getByTestId('archived-list-view')).toBeVisible();
+  await waitForArchivedList(page);
 
   const search = page.getByPlaceholder(/type a value/i);
   await search.click();
