@@ -17,13 +17,14 @@
  * under the License.
  */
 import { normalizeTimestamp, QueryState } from '@superset-ui/core';
+import type { InnerQueryResults, QueryResponse } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
 import { isEqual, omit } from 'lodash-es';
 import { shallowEqual } from 'react-redux';
 import { now } from '@superset-ui/core/utils/dates';
 import type { SqlLabRootState, QueryEditor, Table } from '../types';
 import * as actions from '../actions/sqlLab';
-import type { SqlLabAction } from '../actions/sqlLab';
+import type { Database, SqlLabAction } from '../actions/sqlLab';
 import {
   addToObject,
   alterInObject,
@@ -35,6 +36,19 @@ import {
 } from '../../reduxUtils';
 
 type SqlLabState = SqlLabRootState['sqlLab'];
+
+// The query polling endpoint returns queries enriched with server side fields
+// that are not part of the client side `Query` shape.
+type AlteredQuery = Partial<QueryResponse> & {
+  changed_on: string;
+  state: QueryState;
+};
+
+// Results fetched for async queries carry the final state of the query.
+type QueryResultsWithStatus = InnerQueryResults & { status?: QueryState };
+
+// The databases endpoint returns the extra configuration as a JSON string.
+type DatabaseResponse = Database & { extra?: string };
 
 function alterUnsavedQueryEditorState(
   state: SqlLabState,
@@ -69,8 +83,9 @@ export default function sqlLabReducer(
   state: SqlLabState = {} as SqlLabState,
   action: SqlLabAction,
 ): SqlLabState {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const actionHandlers: Record<string, () => any> = {
+  // The handlers build the next state through the loosely typed helpers in
+  // `reduxUtils`, which widen their return value, hence the `unknown` here.
+  const actionHandlers: Record<string, () => unknown> = {
     [actions.ADD_QUERY_EDITOR]() {
       const mergeUnsavedState = alterInArr(
         state,
@@ -95,8 +110,7 @@ export default function sqlLabReducer(
       return alterInArr(
         state,
         'queryEditors',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        existing as any,
+        existing ?? {},
         {
           remoteId: result!.remoteId,
           name: (query as { name: string }).name,
@@ -125,17 +139,16 @@ export default function sqlLabReducer(
         ...(state.unsavedQueryEditor.id === queryEditor?.id &&
           state.unsavedQueryEditor),
       };
-      const qe = {
+      const qe: Partial<QueryEditor> & { maxRow?: number } = {
         remoteId: progenitor.remoteId,
         name: t('Copy of %s', progenitor.name),
-        dbId: action.query!.dbId ? action.query!.dbId : null,
+        dbId: action.query!.dbId ? action.query!.dbId : undefined,
         catalog: action.query!.catalog ? action.query!.catalog : null,
-        schema: action.query!.schema ? action.query!.schema : null,
+        schema: action.query!.schema ? action.query!.schema : undefined,
         autorun: true,
         sql: action.query!.sql,
         queryLimit: action.query!.queryLimit,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        maxRow: (action.query as any)?.maxRow,
+        maxRow: (action.query as { maxRow?: number } | undefined)?.maxRow,
       };
       const stateWithoutUnsavedState = {
         ...state,
@@ -143,8 +156,7 @@ export default function sqlLabReducer(
       };
       return sqlLabReducer(
         stateWithoutUnsavedState,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        actions.addQueryEditor(qe as any),
+        actions.addQueryEditor(qe),
       );
     },
     [actions.REMOVE_QUERY_EDITOR]() {
@@ -159,8 +171,7 @@ export default function sqlLabReducer(
         (qe: QueryEditor) => qe.tabViewId ?? qe.id,
       );
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const queries: any = {};
+      const queries: SqlLabState['queries'] = {};
       Object.keys(state.queries).forEach(k => {
         const query = state.queries[k];
         if (qeIds.indexOf(query.sqlEditorId) > -1) {
@@ -397,9 +408,10 @@ export default function sqlLabReducer(
       });
     },
     [actions.CLEAR_QUERY_RESULTS]() {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const newResults = { ...(action.query as any).results };
-      newResults.data = [];
+      const newResults = {
+        ...(action.query as Partial<QueryResponse>).results,
+        data: [],
+      };
       return alterInObject(state, 'queries', action.query!, {
         results: newResults,
         cached: true,
@@ -419,8 +431,8 @@ export default function sqlLabReducer(
       ) {
         return state;
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const alts: any = {
+      const resultsKey = action?.results?.query?.resultsKey;
+      const alts = {
         endDttm: now(),
         progress: 100,
         results: action.results,
@@ -432,12 +444,8 @@ export default function sqlLabReducer(
         tempTable: action?.results?.query?.tempTable,
         errorMessage: null,
         cached: false,
+        ...(resultsKey ? { resultsKey } : {}),
       };
-
-      const resultsKey = action?.results?.query?.resultsKey;
-      if (resultsKey) {
-        alts.resultsKey = resultsKey;
-      }
 
       return alterInObject(state, 'queries', action.query!, alts);
     },
@@ -721,10 +729,8 @@ export default function sqlLabReducer(
       };
     },
     [actions.SET_DATABASES]() {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const databases: any = {};
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (action.databases as any[])!.forEach((db: any) => {
+      const databases: SqlLabState['databases'] = {};
+      (action.databases as DatabaseResponse[]).forEach(db => {
         databases[db.id] = {
           ...db,
           extra_json: JSON.parse(db.extra || ''),
@@ -743,64 +749,65 @@ export default function sqlLabReducer(
       // Fetch the updates to the queries present in the store.
       let change = false;
       let { queriesLastUpdate } = state;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      Object.entries(action.alteredQueries!).forEach(
-        ([id, changedQuery]: [string, any]) => {
-          if (
-            !state.queries.hasOwnProperty(id) ||
-            (state.queries[id].state !== QueryState.Stopped &&
-              state.queries[id].state !== QueryState.Failed)
-          ) {
-            const changedOn = normalizeTimestamp(changedQuery.changed_on);
-            const timestamp = Date.parse(changedOn);
-            if (timestamp > queriesLastUpdate) {
-              queriesLastUpdate = timestamp;
-            }
-            const prevState = state.queries[id]?.state;
-            const currentState = changedQuery.state;
-            newQueries[id] = {
-              ...state.queries[id],
-              ...changedQuery,
-              ...(changedQuery.startDttm && {
-                startDttm: Number(changedQuery.startDttm),
-              }),
-              ...(changedQuery.endDttm && {
-                endDttm: Number(changedQuery.endDttm),
-              }),
-              // race condition:
-              // because of async behavior, sql lab may still poll a couple of seconds
-              // when it started fetching or finished rendering results
-              state:
-                currentState === QueryState.Success &&
-                [
-                  QueryState.Fetching,
-                  QueryState.Success,
-                  QueryState.Running,
-                ].includes(prevState)
-                  ? prevState
-                  : currentState,
-            };
-            if (
-              newQueries[id].state === QueryState.Success &&
-              newQueries[id].runAsync === false &&
-              !newQueries[id].results
-            ) {
-              newQueries[id].state = QueryState.Fetching;
-            }
-            if (
-              shallowEqual(
-                omit(newQueries[id], ['extra']),
-                omit(state.queries[id], ['extra']),
-              ) &&
-              isEqual(newQueries[id].extra, state.queries[id].extra)
-            ) {
-              newQueries[id] = state.queries[id];
-            } else {
-              change = true;
-            }
+      Object.entries(
+        action.alteredQueries as Record<string, AlteredQuery>,
+      ).forEach(([id, changedQuery]) => {
+        if (
+          !state.queries.hasOwnProperty(id) ||
+          (state.queries[id].state !== QueryState.Stopped &&
+            state.queries[id].state !== QueryState.Failed)
+        ) {
+          const changedOn = normalizeTimestamp(changedQuery.changed_on);
+          const timestamp = Date.parse(changedOn);
+          if (timestamp > queriesLastUpdate) {
+            queriesLastUpdate = timestamp;
           }
-        },
-      );
+          const prevState = state.queries[id]?.state;
+          const currentState = changedQuery.state;
+          // race condition:
+          // because of async behavior, sql lab may still poll a couple of seconds
+          // when it started fetching or finished rendering results
+          const nextState =
+            prevState &&
+            currentState === QueryState.Success &&
+            [
+              QueryState.Fetching,
+              QueryState.Success,
+              QueryState.Running,
+            ].includes(prevState)
+              ? prevState
+              : currentState;
+          newQueries[id] = {
+            ...state.queries[id],
+            ...changedQuery,
+            ...(changedQuery.startDttm && {
+              startDttm: Number(changedQuery.startDttm),
+            }),
+            ...(changedQuery.endDttm && {
+              endDttm: Number(changedQuery.endDttm),
+            }),
+            state: nextState,
+          };
+          if (
+            newQueries[id].state === QueryState.Success &&
+            newQueries[id].runAsync === false &&
+            !newQueries[id].results
+          ) {
+            newQueries[id].state = QueryState.Fetching;
+          }
+          if (
+            shallowEqual(
+              omit(newQueries[id], ['extra']),
+              omit(state.queries[id], ['extra']),
+            ) &&
+            isEqual(newQueries[id].extra, state.queries[id].extra)
+          ) {
+            newQueries[id] = state.queries[id];
+          } else {
+            change = true;
+          }
+        }
+      });
       if (!change) {
         newQueries = state.queries;
       }
@@ -820,17 +827,19 @@ export default function sqlLabReducer(
             }
             return true;
           })
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map(([id, query]: [string, any]) => [
-            id,
-            {
-              ...query,
-              state:
-                query.resultsKey && query.results?.status
-                  ? query.results.status
-                  : query.state,
-            },
-          ]),
+          .map(([id, query]): [string, SqlLabState['queries'][string]] => {
+            const results = query.results as QueryResultsWithStatus | undefined;
+            return [
+              id,
+              {
+                ...query,
+                state:
+                  query.resultsKey && results?.status
+                    ? results.status
+                    : query.state,
+              },
+            ];
+          }),
       );
       return { ...state, queries: cleanedQueries };
     },
@@ -859,7 +868,7 @@ export default function sqlLabReducer(
     },
   };
   if (action.type in actionHandlers) {
-    return actionHandlers[action.type]();
+    return actionHandlers[action.type]() as SqlLabState;
   }
   return state;
 }
